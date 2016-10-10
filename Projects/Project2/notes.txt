@@ -1,0 +1,26 @@
+ssh mininet@(IP of mininet)
+
+'wireshark &' will run wireshark on host
+
+VM host and all hosts share the same filesystem
+
+ctrl + alt to get mouse control back
+
+scp a file: 'scp filename mininet@(IP of mininet)'
+
+exit will stop the script in mininet
+
+Running python script: sudo python filename
+
+To start a window for a host, use 'xterm h1' or 'xterm r1' for a router
+
+Program needs to receive packets, use approprite headers and forward traffic
+
+Part 1: Host1 should be able to ping Router1 and receive a message back
+
+/usr/include/netinet/ethernet.h this has the ethernet header
+
+/usr/include/netinet/arp.h has the struct used to put ARP packets together (might want to make a copy where the last 4 lines aren't commented out)
+
+networksorcery.com: resource for finding structure of ICMP requests
+~                                                                            
