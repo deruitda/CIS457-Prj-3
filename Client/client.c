@@ -22,7 +22,6 @@ int main(int argc, char **argv)
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     char recvBuff[256];
 		memset(recvBuff, '0', sizeof(recvBuff));
-
 		//get the port first
     printf("Enter a port: ");
     fgets(port, LINE_MAX, stdin);
