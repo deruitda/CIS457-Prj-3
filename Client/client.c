@@ -52,7 +52,7 @@ int main(int argc, char **argv)
 
     int len = sizeof(serveraddr);
     serversocket = accept(sockfd, (struct sockaddr*)&serveraddr, &len);
-
+    printf("Connected to chat server. Type '-h' for help.\n");
 		while(1)
 		{
 			//send the file name to the server
@@ -67,6 +67,7 @@ int main(int argc, char **argv)
 			}
 			send(sockfd, message, strlen(message), 0);
       bzero(message, sizeof(message));
+      fflush(stdout);
 		}
 
 		close(sockfd);
@@ -80,8 +81,13 @@ void *threadListener(void *arg)
   while(1)
   {
     char message[LINE_MAX];
-    recv(sockfd, message, sizeof(message), 0);
-    printf("\nServer: %s\n", message);
+    if(recv(sockfd, message, sizeof(message), 0) == 0)
+    {
+      printf("Server has closed the connection\n");
+      exit(0);
+    }
+
+    printf("\nReceived: %s\n", message);
     bzero(message, sizeof(message));
   }
 }
