@@ -10,7 +10,6 @@
 #include <string.h>
 #include <time.h>
 
-//Authors: Chad Teitsma and Zack Patterson
 
 struct arpheader{
   unsigned short int ar_hrd;		/* Format of hardware address.  */
