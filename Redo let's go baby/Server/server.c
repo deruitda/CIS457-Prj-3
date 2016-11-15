@@ -23,16 +23,20 @@
 #include <openssl/rsa.h>
 
 void *threadListener(void *args);
-void handleErrors(void);
 void pthreads_thread_id(CRYPTO_THREADID *tid);
 void pthreads_locking_callback(int mode, int type, const char *file, int line);
 void thread_setup(void);
+void handleErrors(void);
+int rsa_encrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out);
+int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out);
+int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *iv, unsigned char *ciphertext);
+int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key, unsigned char *iv, unsigned char *plaintext);
+
 int *clients;
 int numClients;
 static pthread_mutex_t *lock_cs;
 static long *lock_count;
 EVP_PKEY *pubkey, *privkey;
-//unsigned char iv[16];
 /**************************************
  * Server
  *************************************/
@@ -46,17 +50,19 @@ int main(int argc, char **argv)
     unsigned char *pubfilename = "RSApub.pem";
     unsigned char *privfilename = "RSApriv.pem";
     unsigned char key[32];
-    //unsigned char ciphertext[1024];
-    //unsigned char decryptedtext[1024];
+    unsigned char iv[16];
+    unsigned char ciphertext[1024];
+    unsigned char decryptedtext[1024];
+    int decryptedtext_len, ciphertext_len;
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
     OPENSSL_config(NULL);
     RAND_bytes(key,32);
-    //RAND_pseudo_bytes(iv,16);
-    FILE* pubf = fopen(pubfilename,"rb");
-    pubkey = PEM_read_PUBKEY(pubf,NULL,NULL,NULL);
+    RAND_pseudo_bytes(iv,16);
     FILE* privf = fopen(privfilename,"rb");
     privkey = PEM_read_PrivateKey(privf,NULL,NULL,NULL);
+    //FILE* pubf = fopen(pubfilename,"rb");
+    //pubkey = PEM_read_PUBKEY(pubf,NULL,NULL,NULL);
     /* End initial OpenSSl setup */
 
     int port;
@@ -91,6 +97,7 @@ int main(int argc, char **argv)
 			//create a new child process to handle the new connection
       pthread_t listener;
       pthread_create(&listener, NULL, threadListener, &clientsocket);
+      //IS THIS RIGHT??????
 	   }
 	return 0;
 }
@@ -101,53 +108,45 @@ void *threadListener(void *args)
   int *clientsocket = malloc(sizeof(args));
   memcpy(clientsocket, args, sizeof(args));
 
-  //get encrypted key
-  unsigned char encrypted_key[256];
+  char encrypted_key[256];
+  char decrypted_key[256];
+  char iv[16];
   recv(*clientsocket, encrypted_key, sizeof(encrypted_key), 0);
-  //printf("Encrypted key: %s\n\n", encrypted_key);
-  unsigned char decrypted_key[32];
-  printf("\n----------------\nEncrypted Key: %s\nDecrypted (symmetric) key: %s\n\n", encrypted_key, decrypted_key);
-  int decryptedkey_len = rsa_decrypt(encrypted_key, strlen(encrypted_key), privkey, decrypted_key);
-  //printf("\n----------------\nEncrypted Key: %s\nDecrypted (symmetric) key: %s\n\n", encrypted_key, decrypted_key);
-
-  unsigned char iv[16];
-  recv(*clientsocket, iv, sizeof(iv), 0);
-  printf("IV: %s\n", iv);
-  //message to be decrypted
-  char message[1024];
-  //encrypted message from client
-  char encryptedMessage[1024];
-
-  while(recv(*clientsocket, encryptedMessage, sizeof(encryptedMessage), 0) > 0)
+  printf("Received Encrypted Key: %s\n", encrypted_key);
+  //printf("Encry key len: %d\n", (int)strlen(encrypted_key));
+  int decryptedkey_len = rsa_decrypt(encrypted_key, sizeof(encrypted_key), privkey, decrypted_key);
+  decrypted_key[decryptedkey_len] = '\0';
+  fflush(stdout);
+  printf("Sym Key: %s\n", decrypted_key);
+  fflush(stdout);
+  recv(*clientsocket, iv, 16, 0);
+  //printf("Received IV: %s\n", iv);
+  char newIV[16] = "";
+  strcat(newIV, iv);
+  //memcpy(newIV, iv, 16);
+  printf("IV: %s\n", newIV);
+  //message to be received
+  char encrypted_text[1024];
+  while(recv(*clientsocket, encrypted_text, sizeof(encrypted_text), 0) > 0)
   {
-    //printf("Enc Message: %s\n", encryptedMessage);
-    //printf("Len: %d\n", (int)strlen(encryptedMessage));
-    int decryptedtext_len = decrypt(encryptedMessage, strlen(encryptedMessage), decrypted_key, iv, message);
-    message[strlen(message)] = '\0';
-    int encryptedtext_len = 0;
-    unsigned char encryptedtext[1024];
-    //printf("Decrypted: %s\n", message);
+    char message[1024];
+    printf("\n----------------------------------\nEncrypted Text: %s\n----------------------------------\n", encrypted_text);
+    int decryptedtext_len = decrypt(encrypted_text, sizeof(encrypted_text), decrypted_key, newIV, message);
+    printf("\n!!!Message!!!: %s\n", message);
     if(message[0] == '-' && message[1] == 'h')
     {
       char *helpmsg = "\nList of available commands: \n\nList connected client numbers: -l\nSend message to all clients: -b \nSend message to specific client: -m# (# symbol represents the client number)\n\n";
-      encryptedtext_len = encrypt(helpmsg, strlen((char *)helpmsg), decrypted_key, iv, encryptedtext);
-      send(*clientsocket, encryptedtext, strlen(encryptedtext), 0);
+      send(*clientsocket, helpmsg, strlen(helpmsg), 0);
     }
     //if the client sends a broadcast with -b
     else if(message[0] == '-' && message[1] == 'b')
     {
       printf("Broadcasting message to all clients...\n");
       int i;
-      char *newMsg = malloc(sizeof(message) - 2);
-      memcpy(newMsg, &encryptedtext[2], sizeof(newMsg));
-      encryptedtext_len = encrypt(newMsg, strlen(newMsg), decrypted_key, iv, encryptedtext);
-      printf("\n-----------------\nEncText: %s\nsymkey: %s\nIV: %s\n-----------------\n", encryptedtext, decrypted_key, iv);
       for(i = 0; i <= numClients; i++)
       {
-
-        send(clients[i], encryptedtext, strlen(encryptedtext), 0);
+        send(clients[i], &message[2], strlen(message), 0);
         printf("Sent to client: %d\n", clients[i]);
-        printf("Contents: %s\n", encryptedtext);
       }
     }
     else if(message[0] == '-' && message[1] == 'k')
@@ -172,7 +171,7 @@ void *threadListener(void *args)
     else if(message[0] == '-' && message[1] == 'l')
     {
       int i;
-      char list[1024] = "Clients Connected: ";
+      char list[LINE_MAX] = "Clients Connected: ";
       for(i = 0; i <= numClients; i++)
       {
         //if the client has disconnected, they cannot be contacted
@@ -186,8 +185,7 @@ void *threadListener(void *args)
         strcat(list, ", ");
       }
       printf("List: %s\n", list);
-      encryptedtext_len = encrypt(list, strlen((char *)list), decrypted_key, iv, encryptedtext);
-      send(*clientsocket, encryptedtext, strlen(encryptedtext), 0);
+      send(*clientsocket, list, strlen(list), 0);
       printf("Sent list to client\n");
     }
     //if the user wants to message a specific client
@@ -218,7 +216,6 @@ void *threadListener(void *args)
       printf("Message Received: %s\n", message);
     }
     bzero(message, sizeof(message));
-    bzero(encryptedMessage, sizeof(encryptedMessage));
   }
   int i;
   //mark that client as inactive
@@ -278,6 +275,29 @@ void pthreads_locking_callback(int mode, int type, const char *file, int line)
     }
 }
 
+void handleErrors(void)
+{
+  ERR_print_errors_fp(stderr);
+  abort();
+}
+
+int rsa_encrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out){
+  EVP_PKEY_CTX *ctx;
+  size_t outlen;
+  ctx = EVP_PKEY_CTX_new(key, NULL);
+  if (!ctx)
+    handleErrors();
+  if (EVP_PKEY_encrypt_init(ctx) <= 0)
+    handleErrors();
+  if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
+    handleErrors();
+  if (EVP_PKEY_encrypt(ctx, NULL, &outlen, in, inlen) <= 0)
+    handleErrors();
+  if (EVP_PKEY_encrypt(ctx, out, &outlen, in, inlen) <= 0)
+    handleErrors();
+  return outlen;
+}
+
 int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out){
   EVP_PKEY_CTX *ctx;
   size_t outlen;
@@ -295,10 +315,21 @@ int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* o
   return outlen;
 }
 
-void handleErrors(void)
-{
-  ERR_print_errors_fp(stderr);
-  abort();
+int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key,
+	unsigned char *iv, unsigned char *ciphertext){
+  EVP_CIPHER_CTX *ctx;
+  int len;
+  int ciphertext_len;
+  if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
+  if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+    handleErrors();
+  if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
+    handleErrors();
+  ciphertext_len = len;
+  if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len)) handleErrors();
+  ciphertext_len += len;
+  EVP_CIPHER_CTX_free(ctx);
+  return ciphertext_len;
 }
 
 int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
@@ -316,21 +347,4 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
   plaintext_len += len;
   EVP_CIPHER_CTX_free(ctx);
   return plaintext_len;
-}
-
-int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key,
-	unsigned char *iv, unsigned char *ciphertext){
-  EVP_CIPHER_CTX *ctx;
-  int len;
-  int ciphertext_len;
-  if(!(ctx = EVP_CIPHER_CTX_new())) handleErrors();
-  if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-    handleErrors();
-  if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
-    handleErrors();
-  ciphertext_len = len;
-  if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len)) handleErrors();
-  ciphertext_len += len;
-  EVP_CIPHER_CTX_free(ctx);
-  return ciphertext_len;
 }

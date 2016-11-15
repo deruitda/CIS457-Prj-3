@@ -16,9 +16,13 @@
 #include <openssl/rsa.h>
 
 void *threadListener(void *arg);
-void handleErrors(void);
 void pthreads_thread_id(CRYPTO_THREADID *tid);
 void pthreads_locking_callback(int mode, int type, const char *file, int line);
+void handleErrors(void);
+int rsa_encrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out);
+int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out);
+int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *iv, unsigned char *ciphertext);
+int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key, unsigned char *iv, unsigned char *plaintext);
 void thread_setup(void);
 static pthread_mutex_t *lock_cs;
 static long *lock_count;
@@ -38,8 +42,7 @@ int main(int argc, char **argv)
     unsigned char *pubfilename = "RSApub.pem";
     unsigned char *privfilename = "RSApriv.pem";
     unsigned char encrypted_key[256];
-    unsigned char ciphertext[1024];
-    unsigned char decryptedtext[1024];
+    //int decryptedtext_len, ciphertext_len;
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
     OPENSSL_config(NULL);
@@ -47,17 +50,15 @@ int main(int argc, char **argv)
     RAND_pseudo_bytes(iv,16);
     EVP_PKEY *pubkey, *privkey;
     FILE* pubf = fopen(pubfilename,"rb");
-    //read public key
     pubkey = PEM_read_PUBKEY(pubf,NULL,NULL,NULL);
-    FILE* privf = fopen(privfilename,"rb");
-    privkey = PEM_read_PrivateKey(privf,NULL,NULL,NULL);
-    //encrypt symmetric key
     int encryptedkey_len = rsa_encrypt(symkey, 32, pubkey, encrypted_key);
 
+    encrypted_key[encryptedkey_len] = '\0';
+    //encrypted_key[encryptedkey_len+1] = '\n';
     /* End initial OpenSSl setup */
 
     char port[20];
-    char message[1024];
+    char message[256];
     char ip_address[20];
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     char recvBuff[256];
@@ -92,20 +93,20 @@ int main(int argc, char **argv)
 
     int len = sizeof(serveraddr);
     serversocket = accept(sockfd, (struct sockaddr*)&serveraddr, &len);
-    printf("Connected to chat server. Type '-h' for help.\n");
-    //send symmetric key
-    printf("\n------------------\nSymKey: %s\nEncKey: %s\n------------------\n", symkey, encrypted_key);
-    //send symmetric key
-    //send(sockfd, encrypted_key, sizeof(encrypted_key), 0);
-    send(sockfd, encrypted_key, strlen(encrypted_key), 0);
-    //printf("IV: %s\n", iv);
+    send(sockfd, encrypted_key, encryptedkey_len, 0);
+    //printf("Sent encrypted_key: %s\n", encrypted_key);
+    printf("Encrypted key: %s\n", encrypted_key);
+    printf("Sym key: %s\n", symkey);
+    printf("IV: %s\n", iv);
     send(sockfd, iv, sizeof(iv), 0);
+    printf("Connected to chat server. Type '-h' for help.\n");
 
 		while(1)
 		{
 			//send the file name to the server
 			printf("Enter a message or type 'q' to quit: ");
-      fgets(message, sizeof(message), stdin);
+			fgets(message, sizeof(message), stdin);
+
 			if(message[0] == 'q' && strlen(message) == 1)
 			{
 				printf("Closing Connections...\n");
@@ -113,19 +114,11 @@ int main(int argc, char **argv)
 				close(serversocket);
 				exit(0);
 			}
-      //Encrypt message
-      unsigned char ciphertext[1024];
-      int ciphertext_len = encrypt(message, strlen((char *)message), symkey, iv, ciphertext);
-      //printf("ciphertext: %s\n", ciphertext);
-      //unsigned char decrypted_key[32];
-      //int decryptedkey_len = rsa_decrypt(encrypted_key, encryptedkey_len, privkey, decrypted_key);
 
-      //int decryptedtext_len = decrypt(ciphertext, ciphertext_len, decrypted_key, iv, decryptedtext);
-      //printf("Encrypted len: %d\n", ciphertext_len);
-      //printf("strlen: %d\n", (int)strlen(ciphertext));
-
-
-      send(sockfd, ciphertext, ciphertext_len, 0);
+      unsigned char encrypted_text[1024];
+      int ciphertext_len = encrypt(message, strlen(message), symkey, iv, encrypted_text);
+      printf("\n----------------------------------\nEncrypted Text: %s\n----------------------------------\n", encrypted_text);
+			send(sockfd, encrypted_text, strlen(encrypted_text), 0);
       bzero(message, sizeof(message));
       fflush(stdout);
 		}
@@ -140,20 +133,15 @@ void *threadListener(void *arg)
   int len = sizeof(serveraddr);
   while(1)
   {
-    char message[1024];
-    char decryptedtext[1024];
+    char message[LINE_MAX];
     if(recv(sockfd, message, sizeof(message), 0) == 0)
     {
       printf("Server has closed the connection\n");
       exit(0);
     }
-    printf("\n-----------------\nEncText: %s\nsymkey: %s\nIV: %s\n-----------------\n", message, symkey, iv);
-    decrypt(message, strlen(message), symkey, iv, decryptedtext);
-    char *newMsg = malloc(strlen(decryptedtext));
-    memcpy(newMsg, decryptedtext, strlen(decryptedtext));
-    printf("\nReceived: %s\n", newMsg);
+
+    printf("\nReceived: %s\n", message);
     bzero(message, sizeof(message));
-    fflush(stdout);
   }
 }
 
@@ -199,6 +187,12 @@ void pthreads_locking_callback(int mode, int type, const char *file, int line)
     }
 }
 
+void handleErrors(void)
+{
+  ERR_print_errors_fp(stderr);
+  abort();
+}
+
 int rsa_encrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out){
   EVP_PKEY_CTX *ctx;
   size_t outlen;
@@ -216,10 +210,21 @@ int rsa_encrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* o
   return outlen;
 }
 
-void handleErrors(void)
-{
-  ERR_print_errors_fp(stderr);
-  abort();
+int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out){
+  EVP_PKEY_CTX *ctx;
+  size_t outlen;
+  ctx = EVP_PKEY_CTX_new(key,NULL);
+  if (!ctx)
+    handleErrors();
+  if (EVP_PKEY_decrypt_init(ctx) <= 0)
+    handleErrors();
+  if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
+    handleErrors();
+  if (EVP_PKEY_decrypt(ctx, NULL, &outlen, in, inlen) <= 0)
+    handleErrors();
+  if (EVP_PKEY_decrypt(ctx, out, &outlen, in, inlen) <= 0)
+    handleErrors();
+  return outlen;
 }
 
 int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key,
@@ -254,21 +259,4 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
   plaintext_len += len;
   EVP_CIPHER_CTX_free(ctx);
   return plaintext_len;
-}
-
-int rsa_decrypt(unsigned char* in, size_t inlen, EVP_PKEY *key, unsigned char* out){
-  EVP_PKEY_CTX *ctx;
-  size_t outlen;
-  ctx = EVP_PKEY_CTX_new(key,NULL);
-  if (!ctx)
-    handleErrors();
-  if (EVP_PKEY_decrypt_init(ctx) <= 0)
-    handleErrors();
-  if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
-    handleErrors();
-  if (EVP_PKEY_decrypt(ctx, NULL, &outlen, in, inlen) <= 0)
-    handleErrors();
-  if (EVP_PKEY_decrypt(ctx, out, &outlen, in, inlen) <= 0)
-    handleErrors();
-  return outlen;
 }
